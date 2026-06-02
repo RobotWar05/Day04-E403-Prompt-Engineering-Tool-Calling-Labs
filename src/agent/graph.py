@@ -47,7 +47,7 @@ def _extract_phone(query: str) -> str | None:
 
 def _extract_customer_name(query: str) -> str | None:
     patterns = [
-        r"cho\s+(.+?)(?:,\s*s|,\s*email|,\s*giao|,\s*Ä‘|\. Email|\. Ship|\. Phone|$)",
+        r"cho\s+(.+?)(?:,\s*s|,\s*email|,\s*giao|,\s*đ|\. Email|\. Ship|\. Phone|$)",
         r"customer\s+(.+?)(?:,|\.|$)",
     ]
     for pattern in patterns:

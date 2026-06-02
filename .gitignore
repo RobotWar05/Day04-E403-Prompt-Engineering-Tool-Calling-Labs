@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .DS_Store
 \#/
+artifacts/orders/*.json
 
 # Keep the student lab package lean
 solution/
