@@ -4,6 +4,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+\#/
 
 # Keep the student lab package lean
 solution/

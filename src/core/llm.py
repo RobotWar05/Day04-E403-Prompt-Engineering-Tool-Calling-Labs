@@ -48,7 +48,21 @@ def build_chat_model(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             temperature=temperature,
         )
-    raise ValueError("This lab supports only the `google` and `ollama` providers.")
+    if provider == "opencode":
+        from langchain_openai import ChatOpenAI
+
+        base_url = os.getenv("LLM_ENDPOINT")
+        if not base_url:
+            raise ValueError("LLM_ENDPOINT must be set when provider='opencode'.")
+        return ChatOpenAI(
+            model=model_name or os.getenv("MODEL", "deepseek-v4-flash"),
+            api_key=os.getenv("API_KEY"),
+            base_url=base_url,
+            temperature=temperature,
+            timeout=float(os.getenv("LLM_TIMEOUT", "90")),
+            max_retries=int(os.getenv("LLM_MAX_RETRIES", "1")),
+        )
+    raise ValueError("This lab supports only the `google`, `ollama`, and `opencode` providers.")
 
 
 def extract_json_object(raw: Any) -> dict[str, Any]:

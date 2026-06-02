@@ -4,10 +4,17 @@ import argparse
 import importlib
 import json
 import sys
+import time
+import traceback
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -249,12 +256,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Grade saved JSON output for the order-agent lab")
     parser.add_argument("--module", default="solution.agent.graph")
     parser.add_argument("--cases", default=str(ROOT_DIR / "data" / "graded_cases.json"))
-    parser.add_argument("--provider", default="google", choices=["google", "ollama"])
+    parser.add_argument("--provider", default="google", choices=["google", "ollama", "opencode"])
     parser.add_argument("--model-name", default=None)
     parser.add_argument("--today", default="2026-06-01")
     parser.add_argument("--pass-threshold", type=float, default=80.0)
-    parser.add_argument("--judge-provider", default=None, choices=["google", "ollama"])
+    parser.add_argument("--case-id", default=None, help="Run only one case id from the cases file.")
+    parser.add_argument("--judge-provider", default=None, choices=["google", "ollama", "opencode"])
     parser.add_argument("--judge-model-name", default=None)
+    parser.add_argument("--no-judge", action="store_true", help="Skip the LLM judge portion for faster debugging.")
+    parser.add_argument("--quiet", action="store_true", help="Hide per-case progress logs.")
+    parser.add_argument("--stop-on-error", action="store_true", help="Stop immediately when a case raises an error.")
     args = parser.parse_args()
 
     module = importlib.import_module(args.module)
@@ -262,27 +273,75 @@ def main() -> int:
         raise SystemExit(f"Module {args.module} does not expose run_agent()")
 
     cases = load_cases(Path(args.cases))
+    if args.case_id:
+        cases = [case for case in cases if case["id"] == args.case_id]
+        if not cases:
+            raise SystemExit(f"Unknown case id: {args.case_id}")
     effective_judge_provider = args.judge_provider
     if effective_judge_provider is None and any(case["weights"].get("llm_judge", 0) > 0 for case in cases):
         effective_judge_provider = args.provider
+    if args.no_judge:
+        effective_judge_provider = None
 
     scores: list[CaseScore] = []
-    for case in cases:
-        raw_result = module.run_agent(
-            case["query"],
-            provider=args.provider,
-            model_name=args.model_name,
-            today=args.today,
+    total_cases = len(cases)
+    if not args.quiet:
+        print(
+            f"[grader] Start {total_cases} cases | provider={args.provider} | judge_provider={effective_judge_provider}",
+            file=sys.stderr,
+            flush=True,
         )
-        result = coerce_result(raw_result, query=case["query"], provider=args.provider, model_name=args.model_name)
-        scores.append(
-            grade_result(
+
+    for index, case in enumerate(cases, start=1):
+        case_id = case["id"]
+        started_at = time.perf_counter()
+        max_score = float(sum(case["weights"].get(key, 0) for key in ALLOWED_WEIGHT_KEYS))
+        if not args.quiet:
+            print(f"[grader] [{index}/{total_cases}] running: {case_id}", file=sys.stderr, flush=True)
+        try:
+            raw_result = module.run_agent(
+                case["query"],
+                provider=args.provider,
+                model_name=args.model_name,
+                today=args.today,
+            )
+            result = coerce_result(raw_result, query=case["query"], provider=args.provider, model_name=args.model_name)
+            score = grade_result(
                 result,
                 case,
                 judge_provider=effective_judge_provider,
                 judge_model_name=args.judge_model_name,
             )
-        )
+            scores.append(score)
+            if not args.quiet:
+                elapsed = time.perf_counter() - started_at
+                print(
+                    f"[grader] [{index}/{total_cases}] done: {case_id} -> {score.score}/{score.max_score} ({elapsed:.1f}s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            if args.stop_on_error:
+                raise
+            message = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            scores.append(
+                CaseScore(
+                    case_id=case_id,
+                    score=0.0,
+                    max_score=max_score,
+                    feedback=[f"Case failed with runtime error: {message}"],
+                )
+            )
+            if not args.quiet:
+                elapsed = time.perf_counter() - started_at
+                print(
+                    f"[grader] [{index}/{total_cases}] failed: {case_id} -> 0/{max_score} ({elapsed:.1f}s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(f"[grader] error: {message}", file=sys.stderr, flush=True)
 
     summary = summarize_scores(scores)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
